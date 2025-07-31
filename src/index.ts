@@ -1,12 +1,20 @@
-export {Change, diff, presentableDiff, DiffConfig} from "./diff"
+export { Change, diff, presentableDiff, DiffConfig } from "./diff";
 
-export {getChunks, goToNextChunk, goToPreviousChunk} from "./merge"
+export { getChunks, goToNextChunk, goToPreviousChunk } from "./merge";
 
-export {MergeConfig, DirectMergeConfig, MergeView} from "./mergeview"
+export { MergeConfig, DirectMergeConfig, MergeView } from "./mergeview";
 
-export {unifiedMergeView, acceptChunk, rejectChunk, getOriginalDoc,
-        originalDocChangeEffect, updateOriginalDoc} from "./unified"
+export {
+  unifiedMergeView,
+  acceptChunk,
+  rejectChunk,
+  getOriginalDoc,
+  originalDocChangeEffect,
+  updateOriginalDoc,
+  generateCodeEffect,
+  applyGeneratedCode,
+} from "./unified";
 
-export {uncollapseUnchanged} from "./deco"
+export { uncollapseUnchanged } from "./deco";
 
-export {Chunk} from "./chunk"
+export { Chunk } from "./chunk";

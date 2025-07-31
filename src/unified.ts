@@ -16,7 +16,6 @@ import {
   Range,
   RangeSet,
   ChangeSet,
-  ChangeDesc,
 } from "@codemirror/state";
 import { invertedEffects } from "@codemirror/commands";
 import { language, highlightingFor } from "@codemirror/language";
@@ -74,7 +73,7 @@ const unifiedChangeGutter = Prec.low(
   gutter({
     class: "cm-changeGutter",
     markers: (view) => view.plugin(decorateChunks)?.gutter || RangeSet.empty,
-    widgetMarker: (view, widget) =>
+    widgetMarker: (_view, widget) =>
       widget instanceof DeletionWidget ? deletedChunkGutterMarker : null,
   })
 );
@@ -98,7 +97,8 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
     computeChunks.of((chunks, tr) => {
       let updateDoc = tr.effects.find((e) => e.is(updateOriginalDoc));
       let acceptEffect = tr.effects.find((e) => e.is(acceptChunkEffect));
-
+      let rejectEffect = tr.effects.find((e) => e.is(rejectChunkEffect));
+      let generateEffect = tr.effects.find((e) => e.is(generateCodeEffect));
       if (updateDoc)
         chunks = Chunk.updateA(
           chunks,
@@ -115,7 +115,13 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
           acceptEffect.value.changes,
           diffConf
         );
-      if (tr.docChanged)
+      if (generateEffect) {
+        // When generating code, rebuild chunks from original to the new document
+        // The document changes will be applied by the transaction, so we use tr.newDoc
+        chunks = Chunk.build(tr.state.field(originalDoc), tr.newDoc, diffConf);
+      }
+      if (rejectEffect || (chunks.length && tr.docChanged)) {
+        // For reject effects or document changes and there are chunks, update the B side (current document)
         chunks = Chunk.updateB(
           chunks,
           tr.state.field(originalDoc),
@@ -123,6 +129,7 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
           tr.changes,
           diffConf
         );
+      }
       return chunks;
     }),
     mergeConfig.of({
@@ -171,6 +178,36 @@ export const acceptChunkEffect = StateEffect.define<{
   },
 });
 
+/// State effect for rejecting a chunk (reverting to original content)
+export const rejectChunkEffect = StateEffect.define<{
+  chunkFromA: number;
+  chunkToA: number;
+  chunkFromB: number;
+  chunkToB: number;
+  originalContent: string;
+  currentContent: string;
+  changes: ChangeSet;
+}>({
+  map: (value, change) => {
+    let fromB = change.mapPos(value.chunkFromB);
+    let toB = change.mapPos(value.chunkToB);
+    return fromB < toB
+      ? {
+          ...value,
+          chunkFromB: fromB,
+          chunkToB: toB,
+        }
+      : undefined;
+  },
+});
+
+/// State effect for dispatching generated code that triggers diff display
+export const generateCodeEffect = StateEffect.define<{
+  generatedCode: string;
+  replaceAll?: boolean;
+  insertAt?: number;
+}>();
+
 /// Create an effect that, when added to a transaction on a unified
 /// merge view, will update the original document that's being compared against.
 export function originalDocChangeEffect(
@@ -183,6 +220,50 @@ export function originalDocChangeEffect(
   });
 }
 
+/// Create a transaction that applies generated code and triggers diff display
+export function applyGeneratedCode(
+  view: EditorView,
+  generatedCode: string,
+  options: { replaceAll?: boolean; insertAt?: number } = {}
+) {
+  const { replaceAll = true, insertAt } = options;
+
+  let changes;
+  if (replaceAll) {
+    // Replace entire document content
+    changes = {
+      from: 0,
+      to: view.state.doc.length,
+      insert: generatedCode,
+    };
+  } else if (insertAt !== undefined) {
+    // Insert at specific position
+    changes = {
+      from: insertAt,
+      to: insertAt,
+      insert: generatedCode,
+    };
+  } else {
+    // Insert at cursor position
+    const pos = view.state.selection.main.head;
+    changes = {
+      from: pos,
+      to: pos,
+      insert: generatedCode,
+    };
+  }
+
+  view.dispatch({
+    changes,
+    effects: generateCodeEffect.of({
+      generatedCode,
+      replaceAll,
+      insertAt,
+    }),
+    userEvent: "generate.code",
+  });
+}
+
 const originalDoc = StateField.define<Text>({
   create: () => Text.empty,
   update(doc, tr) {
@@ -191,6 +272,9 @@ const originalDoc = StateField.define<Text>({
         doc = e.value.doc;
       } else if (e.is(acceptChunkEffect)) {
         doc = e.value.changes.apply(doc);
+      } else if (e.is(rejectChunkEffect)) {
+        // For reject, the original document doesn't change
+        // The effect is used for tracking undo state
       }
     }
     return doc;
@@ -202,7 +286,7 @@ export function getOriginalDoc(state: EditorState): Text {
   return state.field(originalDoc);
 }
 
-/// Inverted effects mapping for undoable accept operations
+/// Inverted effects mapping for undoable accept/reject operations
 const undoableChunkOperations = invertedEffects.of((tr) => {
   let found: StateEffect<any>[] = [];
   for (let e of tr.effects) {
@@ -212,6 +296,19 @@ const undoableChunkOperations = invertedEffects.of((tr) => {
         updateOriginalDoc.of({
           doc: e.value.originalDoc,
           changes: e.value.changes.invert(tr.startState.field(originalDoc)),
+        })
+      );
+    } else if (e.is(rejectChunkEffect)) {
+      // To undo reject: restore the content that was rejected
+      found.push(
+        rejectChunkEffect.of({
+          chunkFromA: e.value.chunkFromA,
+          chunkToA: e.value.chunkToA,
+          chunkFromB: e.value.chunkFromB,
+          chunkToB: e.value.chunkToB,
+          originalContent: e.value.currentContent, // Swap: restore what was there before
+          currentContent: e.value.originalContent,
+          changes: e.value.changes.invert(tr.startState.doc),
         })
       );
     }
@@ -413,12 +510,35 @@ export function rejectChunk(view: EditorView, pos?: number) {
   if (chunk.fromA != chunk.toA && chunk.toB <= state.doc.length)
     insert += state.lineBreak;
 
+  let currentContent = state.sliceDoc(
+    chunk.fromB,
+    Math.max(chunk.fromB, chunk.toB - 1)
+  );
+
+  let changes = ChangeSet.of(
+    {
+      from: chunk.fromB,
+      to: Math.min(state.doc.length, chunk.toB),
+      insert,
+    },
+    state.doc.length
+  );
+
   view.dispatch({
     changes: {
       from: chunk.fromB,
       to: Math.min(state.doc.length, chunk.toB),
       insert,
     },
+    effects: rejectChunkEffect.of({
+      chunkFromA: chunk.fromA,
+      chunkToA: chunk.toA,
+      chunkFromB: chunk.fromB,
+      chunkToB: chunk.toB,
+      originalContent: insert,
+      currentContent: currentContent,
+      changes,
+    }),
     userEvent: "revert",
   });
   return true;
@@ -500,7 +620,7 @@ class InlineDeletion extends WidgetType {
     return this.text == other.text;
   }
 
-  toDOM(view: EditorView) {
+  toDOM(_view: EditorView) {
     let elt = document.createElement("del");
     elt.className = "cm-deletedText";
     elt.textContent = this.text;
