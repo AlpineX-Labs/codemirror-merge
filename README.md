@@ -66,3 +66,37 @@ const view = new EditorView({
   ]
 })
 ```
+
+## Fork
+
+This Fork fixes undo/redo operation using (invertedEffects pattern)[https://codemirror.net/examples/inverted-effect/]
+
+### What's Been Implemented
+1. New StateEffect for Accept Operations
+acceptChunkEffect: A new StateEffect that tracks chunk accept operations with proper position mapping
+Stores chunk boundaries, original document state, and the changes being applied
+2. Inverted Effects for Undo Support
+undoableChunkOperations: Uses invertedEffects.of() to define how accept operations can be undone
+When undoing an accept operation, it restores the original document state
+3. Updated Accept/Reject Functions
+acceptChunk: Now uses the acceptChunkEffect instead of directly updating the original document
+rejectChunk: Remains largely the same since document changes are already undoable by CodeMirror's built-in undo system
+4. Enhanced State Management
+Updated the originalDoc state field to handle the new accept effects
+Modified the computeChunks function to properly recompute diffs when accept effects are applied
+Added the inverted effects extension to the unifiedMergeView extension
+
+### How It Works
+
+#### Accept Operation:
+When a user clicks "Accept" on a chunk, it creates an acceptChunkEffect
+This effect updates the original document and is automatically tracked by the history system
+The inverse operation (restoring the previous original document state) is stored for undo
+
+#### Reject Operation:
+Directly modifies the current document content (reverting to original)
+Uses CodeMirror's built-in undo mechanism since it's just a document change
+
+#### Undo Support:
+Undo Accept: Restores the original document to its previous state before the accept
+Undo Reject: Uses standard document undo to restore the content that was rejected
