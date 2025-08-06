@@ -16,6 +16,7 @@ import {
   Range,
   RangeSet,
   ChangeSet,
+  Extension,
 } from "@codemirror/state";
 import { invertedEffects } from "@codemirror/commands";
 import { language, highlightingFor } from "@codemirror/language";
@@ -63,6 +64,10 @@ interface UnifiedMergeConfig {
   /// a change (default is 3), and `minSize` gives the minimum amount
   /// of collapsible lines that need to be present (defaults to 4).
   collapseUnchanged?: { margin?: number; minSize?: number };
+  /// Optional custom inverted effects extension for undo/redo support.
+  /// If provided, this will be used instead of the default undoableChunkOperations.
+  /// Set to `false` to disable undo support entirely.
+  invertedEffects?: typeof invertedEffects;
 }
 
 const deletedChunkGutterMarker = new (class extends GutterMarker {
@@ -88,6 +93,11 @@ export function unifiedMergeView(config: UnifiedMergeConfig) {
       ? Text.of(config.original.split(/\r?\n/))
       : config.original;
   let diffConf = config.diffConfig || defaultDiffConfig;
+
+  const undoableChunkOperations = createUndoableChunkOperations(
+    config.invertedEffects || invertedEffects
+  );
+
   return [
     Prec.low(decorateChunks),
     deletedChunks,
@@ -286,35 +296,39 @@ export function getOriginalDoc(state: EditorState): Text {
   return state.field(originalDoc);
 }
 
-/// Inverted effects mapping for undoable accept/reject operations
-const undoableChunkOperations = invertedEffects.of((tr) => {
-  let found: StateEffect<any>[] = [];
-  for (let e of tr.effects) {
-    if (e.is(acceptChunkEffect)) {
-      // To undo accept: restore the original document
-      found.push(
-        updateOriginalDoc.of({
-          doc: e.value.originalDoc,
-          changes: e.value.changes.invert(tr.startState.field(originalDoc)),
-        })
-      );
-    } else if (e.is(rejectChunkEffect)) {
-      // To undo reject: restore the content that was rejected
-      found.push(
-        rejectChunkEffect.of({
-          chunkFromA: e.value.chunkFromA,
-          chunkToA: e.value.chunkToA,
-          chunkFromB: e.value.chunkFromB,
-          chunkToB: e.value.chunkToB,
-          originalContent: e.value.currentContent, // Swap: restore what was there before
-          currentContent: e.value.originalContent,
-          changes: e.value.changes.invert(tr.startState.doc),
-        })
-      );
+/// Default inverted effects mapping for undoable accept/reject operations
+export function createUndoableChunkOperations(
+  _invertedEffects: typeof invertedEffects
+): Extension {
+  return _invertedEffects.of((tr) => {
+    let found: StateEffect<any>[] = [];
+    for (let e of tr.effects) {
+      if (e.is(acceptChunkEffect)) {
+        // To undo accept: restore the original document
+        found.push(
+          updateOriginalDoc.of({
+            doc: e.value.originalDoc,
+            changes: e.value.changes.invert(tr.startState.field(originalDoc)),
+          })
+        );
+      } else if (e.is(rejectChunkEffect)) {
+        // To undo reject: restore the content that was rejected
+        found.push(
+          rejectChunkEffect.of({
+            chunkFromA: e.value.chunkFromA,
+            chunkToA: e.value.chunkToA,
+            chunkFromB: e.value.chunkFromB,
+            chunkToB: e.value.chunkToB,
+            originalContent: e.value.currentContent, // Swap: restore what was there before
+            currentContent: e.value.originalContent,
+            changes: e.value.changes.invert(tr.startState.doc),
+          })
+        );
+      }
     }
-  }
-  return found;
-});
+    return found;
+  });
+}
 
 const DeletionWidgets: WeakMap<readonly Change[], Decoration> = new WeakMap();
 
