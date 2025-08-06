@@ -36,10 +36,6 @@ jobs:
       - name: Build package
         run: npm run prepare
 
-      - name: Update version if specified
-        if: github.event.inputs.version != ''
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
-
       - name: Publish to NPM
         run: npm publish
         env:
