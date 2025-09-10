@@ -1,6 +1,6 @@
 {
   "name": "codemirror-merge-alpinex",
-  "version": "6.10.4",
+  "version": "6.10.5",
   "description": "A diff/merge view for CodeMirror",
   "scripts": {
     "test": "cm-runtests",

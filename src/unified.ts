@@ -311,6 +311,15 @@ export function createUndoableChunkOperations(
             changes: e.value.changes.invert(tr.startState.field(originalDoc)),
           })
         );
+      } else if (e.is(updateOriginalDoc)) {
+        // To undo full original-doc updates: restore previous original
+        const prevOrig = tr.startState.field(originalDoc);
+        found.push(
+          updateOriginalDoc.of({
+            doc: prevOrig,
+            changes: e.value.changes.invert(prevOrig),
+          })
+        );
       } else if (e.is(rejectChunkEffect)) {
         // To undo reject: restore the content that was rejected
         found.push(
@@ -554,6 +563,36 @@ export function rejectChunk(view: EditorView, pos?: number) {
       changes,
     }),
     userEvent: "revert",
+  });
+  return true;
+}
+
+/// Accept all chunks in a unified merge view. Returns true if any chunk was accepted.
+export function acceptAllChunks(view: EditorView): boolean {
+  const state = view.state;
+  const orig = state.field(originalDoc);
+  const newContent = state.doc.toString();
+  // Replace entire original document with current document content
+  const changes = ChangeSet.of(
+    { from: 0, to: orig.length, insert: newContent },
+    orig.length
+  );
+  view.dispatch({
+    effects: updateOriginalDoc.of({ doc: changes.apply(orig), changes }),
+    userEvent: "accept.all",
+  });
+  return true;
+}
+
+/// Reject all chunks in a unified merge view. Returns true if any chunk was rejected.
+export function rejectAllChunks(view: EditorView): boolean {
+  const state = view.state;
+  const orig = state.field(originalDoc);
+  const originalContent = orig.toString();
+  // Replace entire current document with original content
+  view.dispatch({
+    changes: { from: 0, to: state.doc.length, insert: originalContent },
+    userEvent: "revert.all",
   });
   return true;
 }

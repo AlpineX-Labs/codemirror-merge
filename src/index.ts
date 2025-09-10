@@ -8,6 +8,8 @@ export {
   unifiedMergeView,
   acceptChunk,
   rejectChunk,
+  acceptAllChunks,
+  rejectAllChunks,
   getOriginalDoc,
   originalDocChangeEffect,
   updateOriginalDoc,
